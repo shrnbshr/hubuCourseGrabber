@@ -1,5 +1,7 @@
 # 湖北大学强智教务系统（jsxsd）自动抢课助手
 
+灵感来自[Auto_courseGrabber](https://github.com/ceilf6/Auto_courseGrabber)，使用Google Antigravity针对强智教务系统进行适配和优化。
+
 面向**湖北大学教务管理系统选课页面**（强智科技 `jsxsd` 架构）的自动化抢课工具。针对湖北大学选课系统的 **jQuery DataTables（`#dataView`）**、**`queryKxkcList()` 异步局部查询机制** 以及 **多层嵌套 iframe 架构** 进行了深度定制与交互极简优化。
 
 ---
