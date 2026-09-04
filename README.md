@@ -21,7 +21,7 @@
 
 ### 3. 打开选课页一键开抢
 1. 登录教务系统后，直接进入选课入口页面：
-   - 选课直达链接：`https://jwxt.hubu.edu.cn/jsxsd/xsxk/xsxk_index?jx0502zbid=5A25EAACE4F240A3BD55041C605C605D`
+   - 选课直达链接(示例)：`https://jwxt.hubu.edu.cn/jsxsd/xsxk/xsxk_index?xxxxxxxxxx=xxxxxxxxxxxxxxxxxxxxxxxxx`
 2. 页面右上角会**自动弹出单个 HUBU 抢课助手面板**（已具备跨 Frame 锁，绝不重复弹窗）。
 3. 在下方课程表格中找到目标课程，**直接点击该行最右侧的【⚡ 抢这门】按钮**。
 4. 脚本会自动将该课程加入监控队列并立即开启自动监控；一旦有人退课释放名额，脚本毫秒级自动提交选课并跳过所有确认弹窗。
