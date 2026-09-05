@@ -1,9 +1,11 @@
-// ==UserScript==
+﻿// ==UserScript==
 // @name         湖北大学强智教务自动抢课助手 (HUBU Course Grabber)
-// @namespace    https://github.com/hubu-course-grabber
-// @version      3.2.0
+// @namespace    https://github.com/shrnbshr/hubuCourseGrabber
+// @version      1.2.0
 // @description  专为湖北大学强智教务系统定制，针对 xsxk_index 和 DataTables 深度优化，支持一键点选抢课、自动查询刷新与弹窗放行
 // @author       HUBU
+// @homepageURL  https://github.com/shrnbshr/hubuCourseGrabber
+// @supportURL   https://github.com/shrnbshr/hubuCourseGrabber/issues
 // @match        *://jwxt.hubu.edu.cn/*
 // @grant        none
 // @run-at       document-idle
@@ -17,29 +19,47 @@
   const __HUBU_GLOBAL__ = window;
   const __HUBU_LOADED_KEY__ = "__HUBU_COURSE_GRABBER_LOADED__";
   const __HUBU_INSTANCE_KEY__ = "__HUBU_COURSE_GRABBER_INSTANCE_ID__";
+  const STORAGE_KEY_TARGETS = "__HUBU_GRABBER_TARGET_COURSES__";
+  const STORAGE_KEY_RUNNING = "__HUBU_GRABBER_IS_RUNNING__";
 
-  // ========== 核心防重：只有选课表格所在的 Frame 才弹窗，课表/导航 Frame 自动静默 ==========
+  // ========== 1. 严格业务模块过滤：非选课页面（成绩/学籍/课表等）绝对静默退出 ==========
+  function isCoursePageContext() {
+    try {
+      const curUrl = window.location.href || "";
+      if (curUrl.includes("/jsxsd/xsxk/")) return true;
+      if (window.top && window.top.location && window.top.location.href.includes("/jsxsd/xsxk/")) return true;
+      if (window.parent && window.parent.location && window.parent.location.href.includes("/jsxsd/xsxk/")) return true;
+    } catch (e) {
+      if ((window.location.href || "").includes("/jsxsd/xsxk/")) return true;
+    }
+
+    // 页面选课专属特征兜底检测
+    try {
+      const pageText = document.body ? (document.body.innerText || "") : "";
+      if (pageText.includes("安全退出选课") || pageText.includes("公选课选课")) {
+        return true;
+      }
+    } catch (e) {}
+
+    return false;
+  }
+
+  if (!isCoursePageContext()) {
+    return;
+  }
+
+  // ========== 2. 严格 Frame 过滤：只有真正承载选课操作的 Frame 才运行，作息时间表等直接退出 ==========
   const isCourseFrame = Boolean(
     document.getElementById("dataView") ||
     typeof window.queryKxkcList === "function" ||
     document.querySelector("input[onclick*='queryKxkcList']")
   );
 
-  // 如果当前 Frame 没有选课相关元素（如底部的作息时间表 Frame），直接退出，绝不弹多余面板
   if (!isCourseFrame) {
     return;
   }
 
-  // 跨 Frame 单例锁：保证全屏仅此一个面板
-  try {
-    if (window.top && window.top.__HUBU_GLOBAL_PANEL_EXISTS__) {
-      return;
-    }
-    if (window.top) {
-      window.top.__HUBU_GLOBAL_PANEL_EXISTS__ = true;
-    }
-  } catch (e) {}
-
+  // 停止旧实例
   if (__HUBU_GLOBAL__[__HUBU_LOADED_KEY__]) {
     try {
       if (__HUBU_GLOBAL__.hubuGrab && typeof __HUBU_GLOBAL__.hubuGrab.stop === "function") {
@@ -52,7 +72,7 @@
   __HUBU_GLOBAL__[__HUBU_INSTANCE_KEY__] = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
   // ========== 配置 ==========
-  const TARGET_COURSES = [];
+  let TARGET_COURSES = [];
   let CHECK_INTERVAL = 1200;
   let REFRESH_INTERVAL_TICKS = 3;
   let MAX_ATTEMPTS = 6000;
@@ -62,17 +82,41 @@
   let isRunning = false;
   let attemptCount = 0;
   let intervalId = null;
-  let scheduledTimerId = null;
-  let scheduledTargetTime = null;
   let lastAlertMsg = "";
 
   const courseStates = new Map();
-  const selectedCourses = new Set();
-  const activeCourses = new Set();
+  const selectedCourseIds = new Set();
+  const activeCourseIds = new Set();
 
-  function log(message, type = "info", courseCode = null) {
+  function saveState() {
+    try {
+      sessionStorage.setItem(STORAGE_KEY_TARGETS, JSON.stringify(TARGET_COURSES));
+      sessionStorage.setItem(STORAGE_KEY_RUNNING, isRunning ? "1" : "0");
+    } catch (e) {}
+  }
+
+  function restoreState() {
+    try {
+      const savedTargets = sessionStorage.getItem(STORAGE_KEY_TARGETS);
+      const savedRunning = sessionStorage.getItem(STORAGE_KEY_RUNNING);
+      if (savedTargets) {
+        const parsed = JSON.parse(savedTargets);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          TARGET_COURSES = parsed;
+          renderCourseList();
+          log(`已从会话恢复 ${TARGET_COURSES.length} 门监控课程`, "info");
+        }
+      }
+      if (savedRunning === "1" && TARGET_COURSES.length > 0 && !isRunning) {
+        log("检测到之前正在抢课，自动恢复抢课任务...", "success");
+        setTimeout(startGrabbing, 600);
+      }
+    } catch (e) {}
+  }
+
+  function log(message, type = "info", tagText = null) {
     const timeStr = new Date().toLocaleTimeString();
-    const tag = courseCode ? `[${courseCode}] ` : "";
+    const tag = tagText ? `[${tagText}] ` : "";
     const fullMsg = `[${timeStr}] ${tag}${message}`;
 
     const styles = {
@@ -88,16 +132,16 @@
     }
   }
 
-  function getCourseState(code) {
-    if (!courseStates.has(code)) {
-      courseStates.set(code, {
+  function getCourseState(id) {
+    if (!courseStates.has(id)) {
+      courseStates.set(id, {
         attempts: 0,
         fails: 0,
         success: false,
         selecting: false
       });
     }
-    return courseStates.get(code);
+    return courseStates.get(id);
   }
 
   // ========== 上下文检索 ==========
@@ -164,41 +208,146 @@
       if (row.classList.contains("dataTables_empty") || row.cells.length < 8) continue;
       if (row.querySelector(".hb-quick-btn")) continue;
 
-      const code = row.cells[0]?.textContent.trim();
-      const name = row.cells[1]?.textContent.trim();
-      const lastCell = row.cells[row.cells.length - 1];
+      const cells = row.cells;
+      const lastCell = cells[cells.length - 1];
+      if (!lastCell) continue;
 
-      if (lastCell && code) {
-        const quickBtn = ctx.doc.createElement("button");
-        quickBtn.className = "hb-quick-btn";
-        quickBtn.textContent = "⚡ 抢这门";
-        quickBtn.style.cssText = `
-          margin-left: 6px;
-          background: #0284c7;
-          color: white;
-          border: none;
-          border-radius: 4px;
-          padding: 2px 6px;
-          font-size: 11px;
-          cursor: pointer;
-          font-weight: bold;
-        `;
-        quickBtn.onclick = function (e) {
-          e.preventDefault();
-          e.stopPropagation();
-          addCourseAndStart(code, name);
-        };
-        lastCell.appendChild(quickBtn);
-      }
+      const info = extractClassInfoFromRow(row);
+      if (!info || !info.id) continue;
+
+      const quickBtn = ctx.doc.createElement("button");
+      quickBtn.className = "hb-quick-btn";
+      quickBtn.textContent = "⚡ 抢这门";
+      quickBtn.style.cssText = `
+        margin-left: 6px;
+        background: #0284c7;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        padding: 2px 6px;
+        font-size: 11px;
+        cursor: pointer;
+        font-weight: bold;
+      `;
+      quickBtn.onclick = function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        addCourseAndStart(info);
+      };
+      lastCell.appendChild(quickBtn);
     }
   }
 
-  function addCourseAndStart(code, name) {
-    const exists = TARGET_COURSES.some((c) => c.code === code);
+  // ========== 提取教学班信息 ==========
+  function extractClassInfoFromRow(row) {
+    const cells = row.cells;
+    if (!cells || cells.length < 8) return null;
+
+    const lastCell = cells[cells.length - 1];
+    const rowHtml = row.innerHTML || "";
+    const lastCellHtml = lastCell ? lastCell.innerHTML : "";
+
+    let jx0404id = "";
+    let xsxkArgs = null;
+
+    const funMatch = (lastCellHtml || rowHtml).match(/xsxkFun\s*\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*\)/);
+    if (funMatch) {
+      jx0404id = funMatch[1];
+      xsxkArgs = [funMatch[1], funMatch[2], funMatch[3]];
+    }
+
+    if (!jx0404id && lastCell) {
+      const divWithId = lastCell.querySelector("div[id^='div_']");
+      if (divWithId && divWithId.id) {
+        jx0404id = divWithId.id.replace(/^div_/, "").trim();
+      }
+    }
+
+    let courseName = "";
+    let courseCode = "";
+
+    const nameLink = row.querySelector("a[href*='openkcjj']");
+    if (nameLink) {
+      courseName = (nameLink.textContent || "").trim();
+    }
+
+    for (let i = 0; i < Math.min(cells.length, 3); i++) {
+      const txt = (cells[i]?.textContent || "").trim();
+      if (!courseCode && /^\d{6,14}$/.test(txt)) {
+        courseCode = txt;
+      } else if (!courseName && txt && !/^\d+$/.test(txt)) {
+        courseName = txt;
+      }
+    }
+
+    if (!courseCode) courseCode = cells[0]?.textContent.trim() || "";
+    if (!courseName) courseName = cells[1]?.textContent.trim() || courseCode;
+
+    const teacher = cells[4]?.textContent.trim() || "";
+    const timeInfo = cells[5]?.textContent.trim() || "";
+
+    if (!jx0404id) {
+      jx0404id = `${courseCode}_${teacher}_${timeInfo}`.replace(/\s+/g, "_");
+    }
+
+    let remaining = 0;
+    const candidateCols = [8, 7, 9];
+    for (let colIdx of candidateCols) {
+      if (cells[colIdx]) {
+        const m = cells[colIdx].textContent.trim().match(/^\d+$/);
+        if (m) {
+          remaining = parseInt(m[0], 10);
+          break;
+        }
+      }
+    }
+
+    const statusText = cells[9]?.textContent.trim() || "";
+    const rowFullText = row.textContent || "";
+    const isConflicted = statusText.includes("冲突") || (rowFullText.includes("冲突") && !rowFullText.includes("无冲突"));
+
+    const isAlreadySelected =
+      lastCellHtml.includes("已选") ||
+      lastCellHtml.includes("退选") ||
+      lastCellHtml.includes("xstkFun");
+
+    let selectBtn = null;
+    if (lastCell) {
+      selectBtn = lastCell.querySelector("a[href*='xsxkFun']") ||
+                  lastCell.querySelector("a:not(.hb-quick-btn)") ||
+                  lastCell.querySelector("button, input[type='button']");
+    }
+
+    return {
+      id: jx0404id,
+      courseCode,
+      courseName,
+      teacher,
+      timeInfo,
+      capacity: remaining,
+      isConflicted,
+      statusText,
+      isAlreadySelected,
+      selectBtn,
+      xsxkArgs,
+      row
+    };
+  }
+
+  function addCourseAndStart(info) {
+    const exists = TARGET_COURSES.some((c) => c.id === info.id);
     if (!exists) {
-      TARGET_COURSES.push({ code, priority: 1, timeFilter: [], teacherFilter: [] });
+      TARGET_COURSES.push({
+        id: info.id,
+        code: info.courseCode,
+        name: info.courseName,
+        teacher: info.teacher,
+        timeInfo: info.timeInfo,
+        priority: 1
+      });
+      saveState();
       renderCourseList();
-      log(`已一键添加监控: ${name || code} (${code})`, "success");
+      log(`已添加监控: ${info.courseName} (${info.teacher} ${info.timeInfo})`, "success");
     }
     if (!isRunning) {
       startGrabbing();
@@ -206,8 +355,8 @@
   }
 
   // ========== 扫描并提取选课行 ==========
-  function scanDataViewTable(courseCodeOrName) {
-    const target = String(courseCodeOrName).trim();
+  function scanDataViewTable(targetIdOrCode) {
+    const target = String(targetIdOrCode).trim();
     if (!target) return [];
 
     const ctx = getActiveContext();
@@ -221,72 +370,15 @@
     for (let row of rows) {
       if (row.classList.contains("dataTables_empty") || row.cells.length < 5) continue;
 
-      const cells = row.cells;
-      const rowText = (row.textContent || "").trim();
+      const info = extractClassInfoFromRow(row);
+      if (!info) continue;
 
-      const courseCode = cells[0] ? cells[0].textContent.trim() : "";
-      const courseName = cells[1] ? cells[1].textContent.trim() : "";
+      info.win = win;
+      info.doc = doc;
 
-      let isHit = false;
-      if (courseCode === target || courseCode.includes(target)) isHit = true;
-      else if (courseName && courseName.includes(target)) isHit = true;
-      else if (rowText.includes(target)) isHit = true;
-
-      if (!isHit) continue;
-
-      const teacher = cells[4] ? cells[4].textContent.trim() : "";
-      const timeInfo = cells[5] ? cells[5].textContent.trim() : "";
-      const capacityText = cells[8] ? cells[8].textContent.trim() : "";
-      const statusText = cells[9] ? cells[9].textContent.trim() : "";
-
-      let remaining = 0;
-      const numMatch = capacityText.match(/\d+/);
-      if (numMatch) remaining = parseInt(numMatch[0], 10);
-
-      const isConflicted = statusText.includes("冲突");
-
-      const lastCell = cells[cells.length - 1];
-      let selectBtn = null;
-      let isAlreadySelected = false;
-
-      const lastCellText = lastCell ? lastCell.textContent.trim() : "";
-      if (lastCellText.includes("已选") || lastCellText.includes("退选")) {
-        isAlreadySelected = true;
+      if (info.id === target || info.courseCode === target || info.courseName.includes(target)) {
+        matched.push(info);
       }
-
-      if (lastCell) {
-        const candidates = lastCell.querySelectorAll("a, button, input[type='button'], input[type='submit']");
-        for (let el of candidates) {
-          if (el.classList.contains("hb-quick-btn")) continue;
-          const t = (el.textContent || el.value || "").trim();
-          const onclickStr = el.getAttribute("onclick") || "";
-          if (t.includes("选课") || onclickStr.includes("choose") || onclickStr.includes("xk") || onclickStr.includes("setXk")) {
-            if (!t.includes("退选")) {
-              selectBtn = el;
-              break;
-            }
-          }
-        }
-        if (!selectBtn && candidates.length > 0 && !isAlreadySelected) {
-          selectBtn = candidates[0];
-        }
-      }
-
-      matched.push({
-        row,
-        doc,
-        win,
-        btn: selectBtn,
-        courseCode: courseCode || target,
-        courseName: courseName || target,
-        teacher,
-        timeInfo,
-        capacity: remaining,
-        isConflicted,
-        statusText,
-        isAlreadySelected,
-        id: `${courseCode}_${teacher}_${timeInfo}`
-      });
     }
 
     return matched;
@@ -306,91 +398,106 @@
 
   // ========== 触发选课 ==========
   function executeSelect(teachingClass) {
-    const { win, doc, btn, courseCode, courseName, id, row } = teachingClass;
-    const state = getCourseState(courseCode);
+    const { win, doc, id, courseName, courseCode, selectBtn, xsxkArgs, row } = teachingClass;
+    const state = getCourseState(id);
 
     if (state.selecting) return;
     state.selecting = true;
     lastAlertMsg = "";
 
-    log(`🎯 发现空位！正在发起选课 [${courseName}]...`, "warning", courseCode);
+    log(`🎯 发现空位(余量:${teachingClass.capacity})！发起选课 [${courseName}]...`, "warning", courseCode);
     hookDialogs(win);
 
-    try {
-      if (btn) {
-        btn.click();
-      } else {
-        const lastCell = row.cells[row.cells.length - 1];
-        const clickable = lastCell.querySelector("[onclick]:not(.hb-quick-btn)");
-        if (clickable) clickable.click();
-      }
+    let executed = false;
 
-      setTimeout(() => {
-        try {
-          const easyUiBtns = doc.querySelectorAll(".panel.window .l-btn, .panel.window .el-button, .messager-button a");
-          for (let b of easyUiBtns) {
-            const txt = (b.textContent || "").trim();
-            if (txt.includes("确定") || txt.includes("是") || txt.includes("OK")) {
-              b.click();
-              break;
-            }
+    if (xsxkArgs && xsxkArgs.length >= 3) {
+      const [jx0404id, token, extra] = xsxkArgs;
+      try {
+        if (typeof win.xsxkFun === "function") {
+          win.xsxkFun(jx0404id, token, extra);
+          executed = true;
+        } else {
+          const script = doc.createElement("script");
+          script.textContent = `if (typeof xsxkFun === 'function') { xsxkFun("${jx0404id}", "${token}", "${extra}"); }`;
+          (doc.head || doc.body || doc.documentElement).appendChild(script);
+          script.remove();
+          executed = true;
+        }
+      } catch (err) {}
+    }
+
+    if (!executed) {
+      try {
+        if (selectBtn) {
+          selectBtn.click();
+        } else if (row) {
+          const lastCell = row.cells[row.cells.length - 1];
+          const clickable = lastCell.querySelector("[onclick]:not(.hb-quick-btn)");
+          if (clickable) clickable.click();
+        }
+      } catch (e) {}
+    }
+
+    setTimeout(() => {
+      try {
+        const easyUiBtns = doc.querySelectorAll(".panel.window .l-btn, .panel.window .el-button, .messager-button a");
+        for (let b of easyUiBtns) {
+          const txt = (b.textContent || "").trim();
+          if (txt.includes("确定") || txt.includes("是") || txt.includes("OK")) {
+            b.click();
+            break;
           }
-        } catch (err) {}
-      }, 300);
+        }
+      } catch (err) {}
+    }, 300);
 
-      setTimeout(() => {
-        try {
-          const msg = lastAlertMsg;
-          lastAlertMsg = "";
+    setTimeout(() => {
+      try {
+        const msg = lastAlertMsg;
+        lastAlertMsg = "";
 
-          if (msg.includes("成功")) {
-            // 教务系统明确返回"成功"
+        if (msg.includes("成功")) {
+          state.success = true;
+          selectedCourseIds.add(id);
+          activeCourseIds.delete(id);
+          log(`🎊 恭喜！成功选上课程: ${courseName}！`, "success", courseCode);
+
+          if (activeCourseIds.size === 0) {
+            log("🎉 监控课程已全部抢到！", "success");
+            stopGrabbing();
+          }
+        } else if (msg) {
+          state.fails++;
+          log(`选课未成功: ${msg}`, "warning", courseCode);
+        } else {
+          const recheck = scanDataViewTable(id);
+          const curr = recheck.find((c) => c.id === id);
+          if (curr && curr.isAlreadySelected) {
             state.success = true;
-            selectedCourses.add(courseCode);
-            activeCourses.delete(courseCode);
+            selectedCourseIds.add(id);
+            activeCourseIds.delete(id);
+            log(`🎊 恭喜！成功选上课程: ${courseName}！`, "success", courseCode);
 
-            log(`🎊 恭喜！成功选上课程: ${courseName} (${courseCode})！`, "success", courseCode);
-
-            if (activeCourses.size === 0) {
+            if (activeCourseIds.size === 0) {
               log("🎉 监控课程已全部抢到！", "success");
               stopGrabbing();
             }
-          } else if (msg) {
-            // 教务系统弹窗了但不含"成功"，视为失败
-            state.fails++;
-            log(`选课未成功: ${msg}`, "warning", courseCode);
           } else {
-            // 没有捕获到弹窗，兜底用表格重扫
-            const recheck = scanDataViewTable(courseCode);
-            const curr = recheck.find((c) => c.id === id);
-            if (curr && curr.isAlreadySelected) {
-              state.success = true;
-              selectedCourses.add(courseCode);
-              activeCourses.delete(courseCode);
-              log(`🎊 恭喜！成功选上课程: ${courseName} (${courseCode})！`, "success", courseCode);
-
-              if (activeCourses.size === 0) {
-                log("🎉 监控课程已全部抢到！", "success");
-                stopGrabbing();
-              }
-            } else {
-              state.fails++;
-              log(`等待下一轮刷新验证 (已尝试 ${state.fails} 次)`, "info", courseCode);
-            }
+            state.fails++;
+            log(`等待下一轮刷新验证 (已尝试 ${state.fails} 次)`, "info", courseCode);
           }
-        } catch (err) {
-        } finally {
-          state.selecting = false;
         }
-      }, 1500);
-    } catch (e) {
-      state.selecting = false;
-    }
+      } catch (err) {
+      } finally {
+        state.selecting = false;
+        saveState();
+      }
+    }, 1500);
   }
 
   // ========== 轮询逻辑 ==========
   function tick() {
-    if (!isRunning || activeCourses.size === 0) return;
+    if (!isRunning || activeCourseIds.size === 0) return;
     attemptCount++;
 
     const ctx = getActiveContext();
@@ -398,30 +505,37 @@
     if (attemptCount % REFRESH_INTERVAL_TICKS === 0) {
       triggerTableRefresh(ctx);
       setTimeout(injectRowShortcuts, 500);
+      return;
     }
 
-    const sorted = TARGET_COURSES.filter((c) => activeCourses.has(c.code)).sort(
+    const sorted = TARGET_COURSES.filter((c) => activeCourseIds.has(c.id)).sort(
       (a, b) => (a.priority || 999) - (b.priority || 999)
     );
 
     for (let cfg of sorted) {
-      const state = getCourseState(cfg.code);
+      const state = getCourseState(cfg.id);
       if (state.success || state.selecting) continue;
 
-      const classes = scanDataViewTable(cfg.code);
+      const classes = scanDataViewTable(cfg.id);
       if (classes.length === 0) continue;
 
       const sel = classes.find((c) => c.isAlreadySelected);
       if (sel) {
         state.success = true;
-        selectedCourses.add(cfg.code);
-        activeCourses.delete(cfg.code);
+        selectedCourseIds.add(cfg.id);
+        activeCourseIds.delete(cfg.id);
         log(`已选上: ${sel.courseName}`, "success", cfg.code);
+        saveState();
         continue;
       }
 
       for (let c of classes) {
-        if (c.isConflicted) continue;
+        if (c.isConflicted) {
+          if (attemptCount % 8 === 0) {
+            log(`[${c.courseName}] 提示时间冲突(${c.statusText || "冲突"})，暂无法选课`, "warning", cfg.code);
+          }
+          continue;
+        }
         if (c.capacity > 0) {
           executeSelect(c);
           return;
@@ -441,16 +555,17 @@
 
     isRunning = true;
     attemptCount = 0;
-    activeCourses.clear();
+    activeCourseIds.clear();
 
     for (let c of TARGET_COURSES) {
-      activeCourses.add(c.code);
-      const s = getCourseState(c.code);
+      activeCourseIds.add(c.id);
+      const s = getCourseState(c.id);
       s.fails = 0;
       s.selecting = false;
     }
 
-    log(`🚀 开始抢课！监控中: ${activeCourses.size} 门课程`, "success");
+    saveState();
+    log(`🚀 开始抢课！监控中: ${activeCourseIds.size} 门教学班`, "success");
     triggerTableRefresh(getActiveContext());
     setTimeout(tick, 400);
     intervalId = setInterval(tick, CHECK_INTERVAL);
@@ -465,6 +580,7 @@
       clearInterval(intervalId);
       intervalId = null;
     }
+    saveState();
     log("⏹️ 已停止抢课", "warning");
     updateButtonStates();
     updateStatusDisplay();
@@ -472,7 +588,15 @@
 
   // ========== UI 悬浮面板 ==========
   function createUI() {
-    // 若已存在旧实例则先移除重新挂载
+    if (document.getElementById("hubuCourseGrabberUI")) return;
+
+    // 全屏跨 Frame 检查：已有存活面板则不重复生成
+    try {
+      if (window.top && window.top.__HUBU_ACTIVE_PANEL__ && window.top.__HUBU_ACTIVE_PANEL__.isConnected) {
+        return;
+      }
+    } catch (e) {}
+
     const oldUI = document.getElementById("hubuCourseGrabberUI");
     if (oldUI) {
       oldUI.remove();
@@ -484,7 +608,7 @@
         position: fixed !important;
         top: 20px;
         right: 20px;
-        width: 320px !important;
+        width: 330px !important;
         background: #090d16 !important;
         border: 2px solid #38bdf8 !important;
         border-radius: 12px !important;
@@ -517,8 +641,11 @@
       .hb-btn-danger { background: #be123c; color: white; width: 100%; }
       .hb-btn:disabled { opacity: 0.5; cursor: not-allowed; }
       .hb-tips { font-size: 11px; color: #94a3b8; line-height: 1.4; background: #020617; padding: 8px; border-radius: 6px; border: 1px solid #1e293b; }
-      .hb-list { max-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
-      .hb-item { background: #020617; padding: 6px 8px; border-radius: 4px; display: flex; justify-content: space-between; font-size: 11px; border: 1px solid #1e293b; }
+      .hb-list { max-height: 140px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+      .hb-item { background: #020617; padding: 6px 8px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; font-size: 11px; border: 1px solid #1e293b; }
+      .hb-item-info { overflow: hidden; }
+      .hb-item-title { font-weight: bold; color: #f8fafc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .hb-item-sub { color: #64748b; font-size: 10px; margin-top: 2px; }
       .hb-log { font-family: monospace; font-size: 10px; color: #94a3b8; max-height: 80px; overflow-y: auto; }
     `;
     (document.head || document.documentElement).appendChild(style);
@@ -562,6 +689,12 @@
     }
     targetParent.appendChild(ui);
 
+    try {
+      if (window.top) {
+        window.top.__HUBU_ACTIVE_PANEL__ = ui;
+      }
+    } catch (e) {}
+
     // 绑定拖拽
     const head = ui.querySelector("#hb-drag-head");
     if (head) {
@@ -593,7 +726,10 @@
     const stopBtn = ui.querySelector("#hb-stop-btn");
     if (stopBtn) stopBtn.onclick = stopGrabbing;
 
-    // 定期注入按钮
+    renderCourseList();
+    updateButtonStates();
+    updateStatusDisplay();
+
     setInterval(injectRowShortcuts, 1500);
   }
 
@@ -633,8 +769,11 @@
     }
     list.innerHTML = TARGET_COURSES.map((item, idx) => `
       <div class="hb-item">
-        <span><b>${item.code}</b></span>
-        <span onclick="window.hubuGrab.removeCourse(${idx})" style="color:#f87171;cursor:pointer;padding:0 4px;">×</span>
+        <div class="hb-item-info">
+          <div class="hb-item-title">${item.name} (${item.code})</div>
+          <div class="hb-item-sub">👨‍🏫 ${item.teacher || "无教师"} | ⏰ ${item.timeInfo || "无时间"}</div>
+        </div>
+        <span onclick="window.hubuGrab.removeCourse(${idx})" style="color:#f87171;cursor:pointer;padding:0 6px;font-size:16px;font-weight:bold;">×</span>
       </div>
     `).join("");
   }
@@ -644,6 +783,7 @@
     stop: stopGrabbing,
     removeCourse: (idx) => {
       TARGET_COURSES.splice(idx, 1);
+      saveState();
       renderCourseList();
     },
     showUI: () => {
@@ -656,11 +796,15 @@
     }
   };
 
-  // 确保界面立即渲染
+  // 确保界面渲染并恢复状态
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", createUI);
+    document.addEventListener("DOMContentLoaded", () => {
+      createUI();
+      restoreState();
+    });
   } else {
     createUI();
+    restoreState();
   }
 
   console.log("%c[HUBU抢课] 脚本已成功载入！", "color: #38bdf8; font-weight: bold; font-size: 14px;");
