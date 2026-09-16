@@ -1,7 +1,8 @@
 # 适用于强智教务系统（jsxsd）自动抢课助手
 
-**视频教程**:
-[bilibili:CourseGrabber使用教程](https://www.bilibili.com/video/BV1g3es6rEVb/?share_source=copy_web&vd_source=13014f9de9c538a97387a694cd6787fc)
+**视频教程**:  
+[bilibili:CourseGrabber使用教程](https://www.bilibili.com/video/BV1g3es6rEVb/?share_source=copy_web&vd_source=13014f9de9c538a97387a694cd6787fc)  
+[douyin:CourseGrabber使用教程](https://www.bilibili.com/video/BV1g3es6rEVb/?share_source=copy_web&vd_source=13014f9de9c538a97387a694cd6787fc)
 
 灵感来自[Auto_courseGrabber](https://github.com/ceilf6/Auto_courseGrabber)，使用Google Antigravity针对强智教务系统进行适配和优化。
 
