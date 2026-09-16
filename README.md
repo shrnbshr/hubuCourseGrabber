@@ -1,6 +1,6 @@
 # 适用于强智教务系统（jsxsd）自动抢课助手
 
-[![Release](https://img.shields.io/github/v/release/shrnbshr/hubuCourseGrabber)](https://github.com/shrnbshr/hubuCourseGrabber/releases) [![Language](https://img.shields.io/github/languages/top/shrnbshr/hubuCourseGrabber)](https://github.com/shrnbshr/hubuCourseGrabber) [![License](https://img.shields.io/github/license/shrnbshr/hubuCourseGrabber)](https://github.com/shrnbshr/hubuCourseGrabber/blob/main/LICENSE)
+[![Stars](https://img.shields.io/github/stars/shrnbshr/hubuCourseGrabber)](https://github.com/shrnbshr/hubuCourseGrabber/stargazers) [![Release](https://img.shields.io/github/v/release/shrnbshr/hubuCourseGrabber)](https://github.com/shrnbshr/hubuCourseGrabber/releases) [![Language](https://img.shields.io/github/languages/top/shrnbshr/hubuCourseGrabber)](https://github.com/shrnbshr/hubuCourseGrabber)
 
 视频教程：
 [bilibili：CourseGrabber使用教程](https://www.bilibili.com/video/BV1g3es6rEVb/?share_source=copy_web&vd_source=13014f9de9c538a97387a694cd6787fc) 
