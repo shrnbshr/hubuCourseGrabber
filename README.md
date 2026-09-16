@@ -1,4 +1,4 @@
-# 适用于强智教务系统（jsxsd）自动抢课助手（例如hubu）
+# 适用于强智教务系统（jsxsd）自动抢课助手
 
 灵感来自[Auto_courseGrabber](https://github.com/ceilf6/Auto_courseGrabber)，使用Google Antigravity针对强智教务系统进行适配和优化。
 
@@ -24,7 +24,7 @@
 ### 3. 打开选课页一键开抢
 
 1. 登录教务系统后，直接进入选课入口页面：
-   - 选课直达链接(示例)：`https://jwxt.hubu.edu.cn/jsxsd/xsxk/xsxk_index?xxxxxxxxxx=xxxxxxxxxxxxxxxxxxxxxxxxx`
+   - 选课直达链接(示例)：`https://jwxt.xxxx.edu.cn/jsxsd/xsxk/xsxk_index?xxxxxxxxxx=xxxxxxx`
 2. 页面右上角会**自动弹出 HUBU 抢课助手控制面板**。
 3. 在下方课程表格中找到目标课程，**直接点击该行最右侧的【⚡ 抢这门】按钮**。
 4. 脚本会自动将该课程加入监控队列并立即开启自动监控；一旦有人退课释放名额，脚本毫秒级自动提交选课并跳过所有确认弹窗。
