@@ -1,12 +1,15 @@
-﻿// ==UserScript==
-// @name         湖北大学强智教务自动抢课助手 (HUBU Course Grabber)
+// ==UserScript==
+// @name         强智教务自动抢课助手 (hubuCourseGrabber)
 // @namespace    https://github.com/shrnbshr/hubuCourseGrabber
-// @version      1.2.0
-// @description  专为湖北大学强智教务系统定制，针对 xsxk_index 和 DataTables 深度优化，支持一键点选抢课、自动查询刷新与弹窗放行
-// @author       HUBU
+// @version      1.3.0
+// @description  专为强智教务系统定制，针对 xsxk_index 和 DataTables 深度优化，支持一键点选抢课、自动查询刷新与弹窗放行
+// @author       shrnbshr
 // @homepageURL  https://github.com/shrnbshr/hubuCourseGrabber
 // @supportURL   https://github.com/shrnbshr/hubuCourseGrabber/issues
-// @match        *://jwxt.hubu.edu.cn/*
+// @match        *://*/jsxsd/*
+// @match        *://*/*/jsxsd/*
+// @include      *://*/*jsxsd*
+// @include      *://*:*/*jsxsd*
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
